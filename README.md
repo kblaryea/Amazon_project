@@ -245,26 +245,31 @@ Group by
 	t1.total_revenue
 Order by total_revenue desc
 ```
+![](https://github.com/kblaryea/Amazon_project/blob/main/Item_categories.png)
+
+#### Remarks
+Electronics overwhelmingly leads with $11.34 M in revenue—about 89.7% of the total. 
+The next highest categories are Sports & Outdoors ($457 K, 3.6%) and Toys & Games ($354 K, 2.8%). 
+Pet Supplies contributes $262 K (2.1%), while Clothing and Home & Kitchen each account for just over 1% and under 1% of revenue, respectively.
 
 3. Average Order Value (AOV)
 Compute the average order value for each customer.
 Challenge: Include only customers with more than 5 orders.
 
 ```sql
-SELECT 
-	c.customer_id,
-	CONCAT(c.first_name, ' ',  c.last_name) as full_name,
-	SUM(total_sale)/COUNT(o.order_id) as AOV,
-	COUNT(o.order_id) as total_orders --- filter
-FROM orders as o
-JOIN 
-customers as c
-ON c.customer_id = o.customer_id
-JOIN 
-order_items as oi
-ON oi.order_id = o.order_id
-GROUP BY 1, 2
-HAVING  COUNT(o.order_id) > 5
+Select 
+	cu.customer_id, 
+	Concat(cu.first_name, ' ', cu.last_name) as full_name,  
+	avg(oi.total_sale) as average_order_value,
+	count(o.order_id) as total_orders
+From orders as o
+Join customers as cu
+On o.customer_id = cu.customer_id
+Join order_items as oi
+On o.order_id = oi.order_item_id
+Group by cu.customer_id
+Having count(o.order_id) > 5
+Order by average_order_value desc;
 ```
 
 4. Monthly Sales Trend
@@ -272,27 +277,39 @@ Query monthly total sales over the past year.
 Challenge: Display the sales trend, grouping by month, return current_month sale, last month sale!
 
 ```sql
-SELECT 
-	year,
-	month,
+---FOR ALL MONTHS AND ALL YEARS
+Select 
+	Extract(Month from order_date) as Month,
+	Extract(Year from order_date) as Year,
+	round(sum(oi.total_sale)::numeric, 2) as current_month_sales,
+	round(lag (sum(oi.total_sale)::numeric, 1) over(Order by Extract(Year from order_date), Extract(Month from order_date)), 2) as previous_month_sales
+From order_items as oi
+Join orders as o
+on oi.order_id = o.order_id
+Where o.order_status != 'Returned' or o.order_status != 'Cancelled'
+Group by Month, Year
+Order by Year, Month;
+
+
+--ALTERNATIVE SOLUTION FOR THE PAST YEAR
+Select 
+	year, 
+	month, 
 	total_sale as current_month_sale,
-	LAG(total_sale, 1) OVER(ORDER BY year, month) as last_month_sale
-FROM ---
+	Lag(total_sale, 1) Over(Order by year, month) as last_month_sale
+From
 (
-SELECT 
-	EXTRACT(MONTH FROM o.order_date) as month,
-	EXTRACT(YEAR FROM o.order_date) as year,
-	ROUND(
-			SUM(oi.total_sale::numeric)
-			,2) as total_sale
-FROM orders as o
-JOIN
-order_items as oi
-ON oi.order_id = o.order_id
-WHERE o.order_date >= CURRENT_DATE - INTERVAL '1 year'
-GROUP BY 1, 2
-ORDER BY year, month
-) as t1
+Select 
+	Extract(Month from order_date) as Month,
+	Extract(Year from order_date) as Year,
+	round(sum(oi.total_sale)::numeric, 2) as total_sale
+From orders as o
+Join order_items as oi
+on oi.order_id = o.order_id
+Where order_date >= Current_Date - Interval '1 year'
+Group by Month, Year
+Order by Year, Month
+);
 ```
 
 
@@ -301,23 +318,19 @@ Find customers who have registered but never placed an order.
 Challenge: List customer details and the time since their registration.
 
 ```sql
-Approach 1
-SELECT *
-	-- reg_date - CURRENT_DATE
-FROM customers
-WHERE customer_id NOT IN (SELECT 
-					DISTINCT customer_id
-				FROM orders
+Select *
+From customers as c
+Left Join orders as o
+On c.customer_id = o.customer_id
+Where order_id is Null;
+
+--ALTERNATIVE SOLUTION
+
+Select * From customers
+Where  customer_id not in (Select 
+				Distinct customer_id
+				From orders
 				);
-```
-```sql
--- Approach 2
-SELECT *
-FROM customers as c
-LEFT JOIN
-orders as o
-ON o.customer_id = c.customer_id
-WHERE o.customer_id IS NULL
 ```
 
 6. Least-Selling Categories by State
@@ -325,33 +338,38 @@ Identify the least-selling product category for each state.
 Challenge: Include the total sales for that category within each state.
 
 ```sql
-WITH ranking_table
-AS
+Select *
+From 
 (
-SELECT 
-	c.state,
-	cat.category_name,
-	SUM(oi.total_sale) as total_sale,
-	RANK() OVER(PARTITION BY c.state ORDER BY SUM(oi.total_sale) ASC) as rank
-FROM orders as o
-JOIN 
-customers as c
-ON o.customer_id = c.customer_id
-JOIN
-order_items as oi
-ON o.order_id = oi. order_id
-JOIN 
-products as p
-ON oi.product_id = p.product_id
-JOIN
-category as cat
-ON cat.category_id = p.category_id
-GROUP BY 1, 2
+Select 
+	c.state, 
+	cat.category_name, 
+	sum(oi.total_sale) as sales_by_state,
+	Rank () Over (Partition by c.state Order by sum(oi.total_sale) Asc) as Rank
+From 
+	orders as o
+Join 
+	order_items as oi
+On 
+	o.order_id = oi.order_id
+Join 
+	customers as c
+On 
+	o.customer_id = c.customer_id
+Join 
+	products as p
+On 
+	oi.product_id = p.product_id
+Join 
+	category as cat
+On 
+	p.category_id = cat.category_id
+Group by 
+	c.state, cat.category_name
+Order by 1, 3 Asc
 )
-SELECT 
-*
-FROM ranking_table
-WHERE rank = 1
+Where rank = 1;
+
 ```
 
 
@@ -360,19 +378,23 @@ Calculate the total value of orders placed by each customer over their lifetime.
 Challenge: Rank customers based on their CLTV.
 
 ```sql
-SELECT 
-	c.customer_id,
-	CONCAT(c.first_name, ' ',  c.last_name) as full_name,
-	SUM(total_sale) as CLTV,
-	DENSE_RANK() OVER( ORDER BY SUM(total_sale) DESC) as cx_ranking
-FROM orders as o
-JOIN 
-customers as c
-ON c.customer_id = o.customer_id
-JOIN 
-order_items as oi
-ON oi.order_id = o.order_id
-GROUP BY 1, 2
+Select 
+	c.customer_id, 
+	concat(c.first_name, ' ', c.last_name) as full_name,
+	round(sum(oi.total_sale)::numeric, 2) as total_value,
+	 dense_rank () over(Order by sum(oi.total_sale) Desc) as rank
+From 
+	orders as o
+Join 
+	order_items as oi
+On 
+	o.order_id = oi.order_id
+Join 
+	customers as c
+On 
+	o.customer_id = c.customer_id
+Group by c.customer_id, full_name
+Order by total_value Desc;
 ```
 
 
@@ -381,17 +403,18 @@ Query products with stock levels below a certain threshold (e.g., less than 10 u
 Challenge: Include last restock date and warehouse information.
 
 ```sql
-SELECT 
-	i.inventory_id,
-	p.product_name,
-	i.stock as current_stock_left,
-	i.last_stock_date,
-	i.warehouse_id
-FROM inventory as i
-join 
-products as p
-ON p.product_id = i.product_id
-WHERE stock < 10
+Select 
+	inv.inventory_id,
+	p.product_id, 
+	p.product_name, 
+	inv.last_stock_date, 
+	inv.stock, 
+	inv.warehouse_id
+From inventory as inv
+Left Join products as p
+On inv.product_id = p.product_id
+Where inv.stock < 10
+Order by inv.stock Desc;
 ```
 
 9. Shipping Delays
@@ -399,19 +422,21 @@ Identify orders where the shipping date is later than 3 days after the order dat
 Challenge: Include customer, order details, and delivery provider.
 
 ```sql
-SELECT 
-	c.*,
-	o.*,
+Select 
+	s.shipping_id,
+	o.order_id,
+	c.customer_id,
+	concat(c.first_name, ' ', c.last_name) as full_name,
 	s.shipping_providers,
-s.shipping_date - o.order_date as days_took_to_ship
-FROM orders as o
-JOIN
-customers as c
-ON c.customer_id = o.customer_id
-JOIN 
-shippings as s
-ON o.order_id = s.order_id
-WHERE s.shipping_date - o.order_date > 3
+	o.order_date,
+	s.shipping_date,
+	s.shipping_date - o.order_date as so_diff
+From shippings as s
+Join orders as o
+On s.order_id = o.order_id
+Left Join customers as c
+On o.customer_id = c.customer_id
+Where s.shipping_date - o.order_date > 3
 ```
 
 10. Payment Success Rate 
@@ -419,15 +444,12 @@ Calculate the percentage of successful payments across all orders.
 Challenge: Include breakdowns by payment status (e.g., failed, pending).
 
 ```sql
-SELECT 
-	p.payment_status,
-	COUNT(*) as total_cnt,
-	COUNT(*)::numeric/(SELECT COUNT(*) FROM payments)::numeric * 100
-FROM orders as o
-JOIN
-payments as p
-ON o.order_id = p.order_id
-GROUP BY 1
+Select 
+	payment_status, 
+	count(*)::numeric as payment_count,
+	round(count(*)/(select count(*) from orders)::numeric * 100, 2) as share_of_payment
+From payments
+Group by payment_status;
 ```
 
 11. Top Performing Sellers
