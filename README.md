@@ -451,57 +451,59 @@ Select
 From payments
 Group by payment_status;
 ```
+![](https://github.com/kblaryea/Amazon_project/blob/main/payment_status.png)
+
+#### Remarks
+Most transactions are successful, indicating a stable payment system. 
+However, the 13.13% refund rate is relatively high and may warrant further investigation into causes such as order issues, product returns, or user errors.
+
 
 11. Top Performing Sellers
 Find the top 5 sellers based on total sales value.
 Challenge: Include both successful and failed orders, and display their percentage of successful orders.
 
 ```sql
-WITH top_sellers
-AS
-(SELECT 
-	s.seller_id,
-	s.seller_name,
-	SUM(oi.total_sale) as total_sale
-FROM orders as o
-JOIN
-sellers as s
-ON o.seller_id = s.seller_id
-JOIN 
-order_items as oi
-ON oi.order_id = o.order_id
-GROUP BY 1, 2
-ORDER BY 3 DESC
-LIMIT 5
+With top_sellers
+As
+(
+Select 
+	s.seller_id, 
+	s.seller_name, 
+	sum(oi.total_sale) as total_sale_value
+From orders as o
+Join sellers as s
+On o.seller_id = s.seller_id
+Join order_items as oi
+On o.order_id = oi.order_id
+Group by s.seller_id, 2
+Order by total_sale_value Desc
+Limit 5
 ),
-
-sellers_reports
-AS
-(SELECT 
+seller_report
+As (
+Select 
 	o.seller_id,
 	ts.seller_name,
-	o.order_status,
-	COUNT(*) as total_orders
-FROM orders as o
-JOIN 
-top_sellers as ts
-ON ts.seller_id = o.seller_id
-WHERE 
-	o.order_status NOT IN ('Inprogress', 'Returned')
-	
-GROUP BY 1, 2, 3
-)
-SELECT 
+	o.order_status, 
+	count(*) as total_orders,
+	ts.total_sale_value as total_sale_value
+from orders as o
+Join top_sellers as ts
+On ts.seller_id = o.seller_id
+Where o.order_status Not In ('Inprogress', 'Returned')
+Group by o.order_status, o.seller_id, ts.seller_name, ts.total_sale_value)
+
+Select 
 	seller_id,
 	seller_name,
-	SUM(CASE WHEN order_status = 'Completed' THEN total_orders ELSE 0 END) as Completed_orders,
-	SUM(CASE WHEN order_status = 'Cancelled' THEN total_orders ELSE 0 END) as Cancelled_orders,
-	SUM(total_orders) as total_orders,
-	SUM(CASE WHEN order_status = 'Completed' THEN total_orders ELSE 0 END)::numeric/
-	SUM(total_orders)::numeric * 100 as successful_orders_percentage
-	
-FROM sellers_reports
-GROUP BY 1, 2
+	Sum(Case when order_status = 'Completed' then total_orders Else 0 End) as completed_orders,
+	Sum(Case when order_status = 'Cancelled' then total_orders Else 0 End) as cancelled_orders,
+	Sum(total_orders) as total_orders,
+	round(Sum(Case when order_status = 'Completed' then total_orders Else 0 End)::numeric/
+	Sum(total_orders)::numeric * 100, 2) as successful_order_ratio,
+	total_sale_value
+from seller_report
+Group by seller_id, seller_name, total_sale_value;
 ```
 
 
@@ -512,23 +514,22 @@ Challenge: Rank products by their profit margin, showing highest to lowest.
 
 
 ```sql
-SELECT 
-	product_id,
-	product_name,
-	profit_margin,
-	DENSE_RANK() OVER( ORDER BY profit_margin DESC) as product_ranking
-FROM
-(SELECT 
+Select 
 	p.product_id,
 	p.product_name,
-	-- SUM(total_sale - (p.cogs * oi.quantity)) as profit,
-	SUM(total_sale - (p.cogs * oi.quantity))/sum(total_sale) * 100 as profit_margin
-FROM order_items as oi
-JOIN 
-products as p
-ON oi.product_id = p.product_id
-GROUP BY 1, 2
-) as t1
+	sum(oi.quantity) as quantity_orders,
+	p.cogs,
+	sum(total_sale)::numeric as total_revenue,
+	(sum(oi.quantity)*cogs):: numeric as total_cost,
+	(sum(total_sale)::numeric - (sum(oi.quantity)*cogs):: numeric) as profit,
+	round((sum(total_sale)::numeric - (sum(oi.quantity)*cogs):: numeric)/sum(total_sale)::numeric *100, 2) as profit_margin,
+	dense_rank () over (order by ((sum(total_sale)::numeric - (sum(oi.quantity)*cogs):: numeric)/sum(total_sale)::numeric *100) Desc)
+From order_items as oi
+Join products as p
+On oi.product_id = p.product_id
+Group by p.product_id, p.product_name
+Order by profit_margin Desc
+Limit 10;
 ```
 
 13. Most Returned Products
@@ -536,20 +537,20 @@ Query the top 10 products by the number of returns.
 Challenge: Display the return rate as a percentage of total units sold for each product.
 
 ```sql
-SELECT 
-	p.product_id,
-	p.product_name,
-	COUNT(*) as total_unit_sold,
-	SUM(CASE WHEN o.order_status = 'Returned' THEN 1 ELSE 0 END) as total_returned,
-	SUM(CASE WHEN o.order_status = 'Returned' THEN 1 ELSE 0 END)::numeric/COUNT(*)::numeric * 100 as return_percentage
-FROM order_items as oi
-JOIN 
-products as p
-ON oi.product_id = p.product_id
-JOIN orders as o
-ON o.order_id = oi.order_id
-GROUP BY 1, 2
-ORDER BY 5 DESC
+Select 
+	p.product_id, 
+	p.product_name, 
+	sum(quantity)::numeric as total_unit_sold,
+	sum(Case when o.order_status = 'Returned' then 1 Else 0 End)::numeric as total_return,
+	round(sum(Case when o.order_status = 'Returned' then 1 Else 0 End)::numeric/sum(quantity)::numeric *100, 2) as percentage_returned
+From orders as o
+Join order_items as oi
+On o.order_id = oi.order_id
+Join products as p
+On oi.product_id = p.product_id
+Group by p.product_id, p.product_name 
+Order by round(sum(Case when o.order_status = 'Returned' then 1 Else 0 End)::numeric/sum(quantity)::numeric *100, 2) Desc
+
 ```
 
 14. Inactive Sellers
@@ -557,23 +558,19 @@ Identify sellers who haven’t made any sales in the last 6 months.
 Challenge: Show the last sale date and total sales from those sellers.
 
 ```sql
-WITH cte1 -- as these sellers has not done any sale in last 6 month
-AS
-(SELECT * FROM sellers
-WHERE seller_id NOT IN (SELECT seller_id FROM orders WHERE order_date >= CURRENT_DATE - INTERVAL '6 month')
-)
+Select 
+	s.seller_id,
+	s.seller_name,
+	max(o.order_date) as last_order_date, 
+	round(sum(oi.total_sale)::numeric, 2) as sellers_total_sale
+From orders as o
+Join order_items as oi
+On o.order_id = oi.order_id
+Right Join sellers as s
+On s.seller_id = o.seller_id
+Group by s.seller_id
+Having max(o.order_date) > current_date - interval '10 month' or max(o.order_date) is Null
 
-SELECT 
-o.seller_id,
-MAX(o.order_date) as last_sale_date,
-MAX(oi.total_sale) as last_sale_amount
-FROM orders as o
-JOIN 
-cte1
-ON cte1.seller_id = o.seller_id
-JOIN order_items as oi
-ON o.order_id = oi.order_id
-GROUP BY 1
 ```
 
 
@@ -582,26 +579,28 @@ if the customer has done more than 5 return categorize them as returning otherwi
 Challenge: List customers id, name, total orders, total returns
 
 ```sql
-SELECT 
-c_full_name as customers,
-total_orders,
-total_return,
-CASE
-	WHEN total_return > 5 THEN 'Returning_customers' ELSE 'New'
-END as cx_category
-FROM
-(SELECT 
-	CONCAT(c.first_name, ' ', c.last_name) as c_full_name,
-	COUNT(o.order_id) as total_orders,
-	SUM(CASE WHEN o.order_status = 'Returned' THEN 1 ELSE 0 END) as total_return	
-FROM orders as o
-JOIN 
-customers as c
-ON c.customer_id = o.customer_id
-JOIN
-order_items as oi
-ON oi.order_id = o.order_id
-GROUP BY 1)
+Select 
+	t1.full_name as customers,
+	t1.total_orders,
+	t1.total_return,
+	Case
+	When total_return > 5 then 'Returning Customer' 
+	Else 'New Customer'
+	End as cx_category
+From
+(
+Select 
+	concat(c.first_name, ' ', c.last_name) as full_name,
+	count(o.order_id) as total_orders,
+	sum(case when o.order_status = 'Returned' then 1 else 0 End) as total_return	
+From orders as o
+Join customers as c
+on c.customer_id = o.customer_id
+Join order_items as oi
+on oi.order_id = o.order_id
+Group by concat(c.first_name, ' ', c.last_name)
+) as t1
+
 ```
 
 
@@ -609,24 +608,53 @@ GROUP BY 1)
 Identify the top 5 customers with the highest number of orders for each state.
 Challenge: Include the number of orders and total sales for each customer.
 ```sql
-SELECT * FROM 
-(SELECT 
-	c.state,
-	CONCAT(c.first_name, ' ', c.last_name) as customers,
-	COUNT(o.order_id) as total_orders,
-	SUM(total_sale) as total_sale,
-	DENSE_RANK() OVER(PARTITION BY c.state ORDER BY COUNT(o.order_id) DESC) as rank
-FROM orders as o
-JOIN 
-order_items as oi
-ON oi.order_id = o.order_id
-JOIN 
-customers as c
-ON 
-c.customer_id = o.customer_id
-GROUP BY 1, 2
+-- Ranking by highest amount spend by each customer
+Select *
+From
+(
+Select
+concat(c.first_name, ' ', c.last_name) as full_name,
+c.customer_id,
+count(o.order_id) as total_order,
+sum(oi.total_sale)::numeric as total_spent,
+c.state,
+Rank () Over(Partition by state Order by sum(oi.total_sale)::numeric Desc) as Rank
+From orders as o
+Join order_items as oi
+on o.order_id = oi.order_id
+Join customers as c
+On o.customer_id = c.customer_id
+Group by c.customer_id, state
+Order by State
 ) as t1
-WHERE rank <=5
+Where rank between 1 and 5
+
+
+
+-- Ranking by highest number of orders made by each customer
+
+Select *
+From
+(
+Select
+concat(c.first_name, ' ', c.last_name) as full_name,
+c.customer_id,
+count(o.order_id) as total_order,
+sum(oi.total_sale)::numeric as total_spent,
+c.state,
+Dense_Rank () Over(Partition by state Order by count(o.order_id) Desc) as Rank
+From orders as o
+Join order_items as oi
+on o.order_id = oi.order_id
+Join customers as c
+On o.customer_id = c.customer_id
+Group by c.customer_id, state
+Order by State
+) as t1
+Where rank between 1 and 5
+
+
+
 ```
 
 17. Revenue by Shipping Provider
@@ -634,20 +662,17 @@ Calculate the total revenue handled by each shipping provider.
 Challenge: Include the total number of orders handled and the average delivery time for each provider.
 
 ```sql
-SELECT 
-	s.shipping_providers,
-	COUNT(o.order_id) as order_handled,
-	SUM(oi.total_sale) as total_sale,
-	COALESCE(AVG(s.return_date - s.shipping_date), 0) as average_days
-FROM orders as o
-JOIN 
-order_items as oi
-ON oi.order_id = o.order_id
-JOIN 
-shippings as s
-ON 
-s.order_id = o.order_id
-GROUP BY 1
+
+Select 
+s.shipping_providers, 
+count(o.order_id) as total_orders_handled, 
+round(sum(oi.total_sale)::numeric, 2) as total_revenue_handled
+From orders as o
+Join order_items as oi
+on o.order_id = oi.order_id
+Join shippings as s
+On s.order_id = o.order_id
+Group by  s.shipping_providers;
 ```
 
 18. Top 10 product with highest decreasing revenue ratio compare to last year(2022) and current_year(2023)
@@ -655,140 +680,79 @@ Challenge: Return product_id, product_name, category_name, 2022 revenue and 2023
 Note: Decrease ratio = cr-ls/ls* 100 (cs = current_year ls=last_year)
 
 ```sql
-WITH last_year_sale
-as
+Create Table table_2022
+As
 (
-SELECT 
-	p.product_id,
-	p.product_name,
-	SUM(oi.total_sale) as revenue
-FROM orders as o
-JOIN 
-order_items as oi
-ON oi.order_id = o.order_id
-JOIN 
-products as p
-ON 
-p.product_id = oi.product_id
-WHERE EXTRACT(YEAR FROM o.order_date) = 2022
-GROUP BY 1, 2
-),
-
-current_year_sale
-AS
+Select *
+From
 (
-SELECT 
-	p.product_id,
-	p.product_name,
-	SUM(oi.total_sale) as revenue
-FROM orders as o
-JOIN 
-order_items as oi
-ON oi.order_id = o.order_id
-JOIN 
-products as p
-ON 
-p.product_id = oi.product_id
-WHERE EXTRACT(YEAR FROM o.order_date) = 2023
-GROUP BY 1, 2
+Select 
+p.product_id,
+p.product_name,
+c.category_name,
+sum(oi.total_sale)::numeric as total_revenue,
+Extract(Year from o.order_date) as Year
+From orders as o
+Join order_items oi
+On o.order_id = oi.order_id
+Join products as p
+On oi.product_id = p.product_id
+Left Join category as c
+On p.category_id = c.category_id
+Where (o.order_status = 'Inprogress' or o.order_status = 'Completed') and
+ (Extract(Year from o.order_date) = 2022 or Extract(Year from o.order_date) = 2023)
+ Group by year, p.product_name, p.product_id, c.category_name
+ ) as t1
+ Where year = 2022
 )
 
-SELECT
-	cs.product_id,
-	ls.revenue as last_year_revenue,
-	cs.revenue as current_year_revenue,
-	ls.revenue - cs.revenue as rev_diff,
-	ROUND((cs.revenue - ls.revenue)::numeric/ls.revenue::numeric * 100, 2) as reveneue_dec_ratio
-FROM last_year_sale as ls
-JOIN
-current_year_sale as cs
-ON ls.product_id = cs.product_id
-WHERE 
-	ls.revenue > cs.revenue
-ORDER BY 5 DESC
-LIMIT 10
-```
+--Creating a table for 2023 data 
 
-
-19. Final Task: Stored Procedure
-Create a stored procedure that, when a product is sold, performs the following actions:
-Inserts a new sales record into the orders and order_items tables.
-Updates the inventory table to reduce the stock based on the product and quantity purchased.
-The procedure should ensure that the stock is adjusted immediately after recording the sale.
-
-```SQL
-CREATE OR REPLACE PROCEDURE add_sales
+Create Table table_2023
+As
 (
-p_order_id INT,
-p_customer_id INT,
-p_seller_id INT,
-p_order_item_id INT,
-p_product_id INT,
-p_quantity INT
+Select *
+From
+(
+Select 
+p.product_id,
+p.product_name,
+c.category_name,
+sum(oi.total_sale)::numeric as total_revenue,
+Extract(Year from o.order_date) as Year
+From orders as o
+Join order_items oi
+On o.order_id = oi.order_id
+Join products as p
+On oi.product_id = p.product_id
+Left Join category as c
+On p.category_id = c.category_id
+Where (o.order_status = 'Inprogress' or o.order_status = 'Completed') and
+ (Extract(Year from o.order_date) = 2022 or Extract(Year from o.order_date) = 2023)
+ Group by year, p.product_name, p.product_id, c.category_name
+ ) as t1
+ Where year = 2023
 )
-LANGUAGE plpgsql
-AS $$
 
-DECLARE 
--- all variable
-v_count INT;
-v_price FLOAT;
-v_product VARCHAR(50);
+--Join both tables and find the percentage change in revenue. 
 
-BEGIN
--- Fetching product name and price based p id entered
-	SELECT 
-		price, product_name
-		INTO
-		v_price, v_product
-	FROM products
-	WHERE product_id = p_product_id;
-	
--- checking stock and product availability in inventory	
-	SELECT 
-		COUNT(*) 
-		INTO
-		v_count
-	FROM inventory
-	WHERE 
-		product_id = p_product_id
-		AND 
-		stock >= p_quantity;
-		
-	IF v_count > 0 THEN
-	-- add into orders and order_items table
-	-- update inventory
-		INSERT INTO orders(order_id, order_date, customer_id, seller_id)
-		VALUES
-		(p_order_id, CURRENT_DATE, p_customer_id, p_seller_id);
-
-		-- adding into order list
-		INSERT INTO order_items(order_item_id, order_id, product_id, quantity, price_per_unit, total_sale)
-		VALUES
-		(p_order_item_id, p_order_id, p_product_id, p_quantity, v_price, v_price*p_quantity);
-
-		--updating inventory
-		UPDATE inventory
-		SET stock = stock - p_quantity
-		WHERE product_id = p_product_id;
-		
-		RAISE NOTICE 'Thank you product: % sale has been added also inventory stock updates',v_product; 
-	ELSE
-		RAISE NOTICE 'Thank you for for your info the product: % is not available', v_product;
-	END IF;
-END;
-$$
+Select 
+t2.product_id, 
+t2.product_name, 
+t2.category_name, 
+t2.total_revenue as rev_2022, 
+t2.year, 
+t3.total_revenue as rev_2023, 
+t3.year,
+round((t3.total_revenue-t2.total_revenue)/t2.total_revenue*100, 2) as revenue_ratio
+From table_2022 as t2
+Join table_2023 as t3
+On t2.product_id = t3.product_id
+Order by revenue_ratio 
+Limit 10;
 ```
 
-
-
-**Testing Store Procedure**
-call add_sales
-(
-25005, 2, 5, 25004, 1, 14
-);
-
----
+----------------------------------------------------------------------------------------------------
 
 ---
 
@@ -803,15 +767,15 @@ This project enabled me to:
 
 ---
 
-## **Conclusion**
 
-This advanced SQL project successfully demonstrates my ability to solve real-world e-commerce problems using structured queries. From improving customer retention to optimizing inventory and logistics, the project provides valuable insights into operational challenges and solutions.
+## **Key Techniques Used**
+- Joins: Combined data from multiple tables for comprehensive analysis.
+- Window Functions: Used RANK(), DENSE_RANK(), and LAG() for ranking and trend analysis.
+- Aggregations: Applied SUM(), COUNT(), and AVG() for calculations.
+- Conditional Logic: Used CASE statements for categorization.
+- Subqueries and CTEs: Modularized queries for better readability and reusability.
 
+
+## Conclusion
+This project demonstrates the power of SQL in solving complex business problems. By analyzing sales, customer behavior, product performance, and operational efficiency, the project provides valuable insights to improve revenue, customer satisfaction, and operational processes.
 By completing this project, I have gained a deeper understanding of how SQL can be used to tackle complex data problems and drive business decision-making.
-
----
-
-### **Entity Relationship Diagram (ERD)**
-![ERD](https://github.com/najirh/amazon_usa_project5/blob/main/erd.png)
-
----
