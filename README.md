@@ -159,6 +159,8 @@ Key business problems identified:
 
 ---
 
+
+
 ## **Solving Business Problems**
 
 ### Solutions Implemented:
@@ -167,21 +169,43 @@ Query the top 10 products by total sales value.
 Challenge: Include product name, total quantity sold, and total sales value.
 
 ```sql
-SELECT 
+Select 
+	pr.product_id, 
+	pr.product_name, 
+	sum(quantity)as total_quantity, 
+	sum(quantity*price_per_unit) as total_sale_value
+From products as pr
+Join order_items as oi
+on pr.product_id = oi.product_id
+Group by pr.product_id, pr.product_name
+Order by total_sale_value desc
+Limit 10;
+
+-- ALTERNATIVE SOLUTION
+
+--Creating new column for total sales
+Alter Table order_items
+Add Column total_sale Float;
+
+--Updating qty * price per unit
+Update order_items
+Set total_sale = quantity * price_per_unit;
+
+
+
+Select 
 	oi.product_id,
 	p.product_name,
-	SUM(oi.total_sale) as total_sale,
-	COUNT(o.order_id)  as total_orders
-FROM orders as o
-JOIN
-order_items as oi
-ON oi.order_id = o.order_id
-JOIN 
-products as p
-ON p.product_id = oi.product_id
-GROUP BY 1, 2
-ORDER BY 3 DESC
-LIMIT 10
+	count(o.order_id)as total_orders,
+	sum(oi.total_sale) as total_sale
+From orders as o
+Join order_items as oi
+On oi.order_id = o.order_id
+Join products as p
+On p.product_id = oi.product_id
+Group by oi.product_id, p.product_name
+Order by total_sale desc
+Limit 10;
 ```
 
 2. Revenue by Category
